@@ -1,0 +1,24 @@
+From 9dc9fbdf78afbe46b00672be14a9cbf781c9b23b Mon Sep 17 00:00:00 2001
+From: Sebastien DUMETZ <s.dumetz@holusion.com>
+Date: Fri, 19 Apr 2024 15:34:09 +0200
+Subject: [PATCH 2/6] restack xwayland surface on activation
+
+---
+ xwayland.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/xwayland.c b/xwayland.c
+index 30749d5..ae4612a 100644
+--- a/xwayland.c
++++ b/xwayland.c
+@@ -99,6 +99,7 @@ activate(struct cg_view *view, bool activate)
+ {
+ 	struct cg_xwayland_view *xwayland_view = xwayland_view_from_view(view);
+ 	wlr_xwayland_surface_activate(xwayland_view->xwayland_surface, activate);
++	wlr_xwayland_surface_restack(xwayland_view->xwayland_surface, NULL, XCB_STACK_MODE_ABOVE);
+ }
+ 
+ static void
+-- 
+2.39.5
+

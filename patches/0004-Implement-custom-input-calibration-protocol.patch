@@ -1,0 +1,1017 @@
+From f3f4b9062440620351f3044c4ebed62004b09ca9 Mon Sep 17 00:00:00 2001
+From: Sebastien DUMETZ <s.dumetz@holusion.com>
+Date: Wed, 17 Apr 2024 16:54:39 +0200
+Subject: [PATCH 4/6] Implement custom input calibration protocol
+
+---
+ cage.c                         |   2 +-
+ calibration.c                  | 236 ++++++++++++++++++++++++
+ calibration.h                  |  13 ++
+ config.h.in                    |   2 +
+ meson.build                    |   9 +
+ meson_options.txt              |   1 +
+ protocol/input_calibration.c   |  82 +++++++++
+ protocol/input_calibration.h   | 317 +++++++++++++++++++++++++++++++++
+ protocol/input_calibration.xml | 152 ++++++++++++++++
+ seat.c                         |  22 ++-
+ seat.h                         |   7 +
+ 11 files changed, 841 insertions(+), 2 deletions(-)
+ create mode 100644 calibration.c
+ create mode 100644 calibration.h
+ create mode 100644 protocol/input_calibration.c
+ create mode 100644 protocol/input_calibration.h
+ create mode 100644 protocol/input_calibration.xml
+
+diff --git a/cage.c b/cage.c
+index 26ab9ef..c1cbb66 100644
+--- a/cage.c
++++ b/cage.c
+@@ -289,7 +289,7 @@ main(int argc, char *argv[])
+ 	}
+ 
+ #ifdef DEBUG
+-	wlr_log_init(WLR_DEBUG, NULL);
++	wlr_log_init(WLR_INFO, NULL);
+ #else
+ 	wlr_log_init(WLR_ERROR, NULL);
+ #endif
+diff --git a/calibration.c b/calibration.c
+new file mode 100644
+index 0000000..f57cd6d
+--- /dev/null
++++ b/calibration.c
+@@ -0,0 +1,236 @@
++
++#include <wayland-server-core.h>
++#include <wayland-util.h>
++#include <assert.h>
++
++#include <wlr/util/log.h>
++
++#include "output.h"
++#include "seat.h"
++#include "protocol/input_calibration.h"
++
++#include "calibration.h"
++
++static const struct ext_input_calibration_manager_v1_interface input_calibration_impl;
++static const struct ext_input_device_v1_interface input_device_impl;
++
++struct input_calibration_manager_v1 {
++  struct wl_global *global;
++  struct cg_seat *seat;
++
++  // Internal state
++  struct wl_list resources;
++  struct wl_list devices; // input_device_v1::link
++
++  struct wl_listener destroy;
++
++  struct {
++    struct wl_signal add;
++		struct wl_signal done;
++	} events;
++
++  void* data;
++};
++
++
++struct input_device_v1 {
++  struct input_calibration_manager_v1 *manager;
++  struct wl_list link;
++
++  // Internal state
++  struct wlr_input_device *device;
++  struct wl_list resources;
++
++  
++	struct wl_listener device_destroy;
++
++  void* data;
++};
++
++
++
++static void manager_send_device(struct input_calibration_manager_v1 *manager,
++	struct input_device_v1 *device, struct wl_resource *manager_resource);
++
++
++static void manager_handle_destroy(struct wl_client *client,
++		struct wl_resource *manager_resource) {
++	wl_resource_destroy(manager_resource);
++}
++
++static const struct ext_input_calibration_manager_v1_interface input_calibration_impl = {
++	.destroy = manager_handle_destroy,
++};
++
++
++static void manager_handle_resource_destroy(struct wl_resource *resource) {
++	wl_list_remove(wl_resource_get_link(resource));
++}
++
++static void input_calibration_bind(struct wl_client *wl_client, void *data,
++		uint32_t version, uint32_t id) {
++	struct input_calibration_manager_v1 *manager = data;
++
++	struct wl_resource *manager_resource  = wl_resource_create(wl_client,
++		&ext_input_calibration_manager_v1_interface, version, id);
++	if (!manager_resource) {
++		wl_client_post_no_memory(wl_client);
++		return;
++	}
++
++	wl_resource_set_implementation(manager_resource, &input_calibration_impl,
++		manager, manager_handle_resource_destroy);
++
++
++	wl_list_insert(&manager->resources, wl_resource_get_link(manager_resource));
++	struct input_device_v1 *device;
++	wl_list_for_each(device, &manager->devices, link) {
++		manager_send_device(manager, device, manager_resource);
++	}
++
++	ext_input_calibration_manager_v1_send_done(manager_resource);
++}
++
++
++struct input_calibration_manager_v1 *create_input_calibration(struct cg_seat *seat){
++  struct input_calibration_manager_v1  *manager = calloc(1, sizeof(struct input_calibration_manager_v1));
++  if (!manager) {
++    wlr_log(WLR_ERROR, "Failed to allocate input_calibration");
++    return NULL;
++  }
++
++
++  wl_list_init(&manager->devices);
++  wl_list_init(&manager->resources);
++  wl_signal_init(&manager->events.add);
++  wl_signal_init(&manager->events.done);
++
++  manager->seat = seat;
++  manager->global = wl_global_create(seat->server->wl_display, &ext_input_calibration_manager_v1_interface, 1, manager, input_calibration_bind);
++
++  return manager;
++}
++
++static void input_device_destroy(struct input_device_v1 *device) {
++  if(device == NULL) return;
++  struct wl_resource *resource, *tmp;
++  wl_resource_for_each_safe(resource, tmp, &device->resources) {
++    ext_input_device_v1_send_removed(resource);
++		wl_list_remove(wl_resource_get_link(resource));
++    wl_list_init(wl_resource_get_link(resource));
++		wl_resource_set_user_data(resource, NULL);
++  }
++  wl_list_remove(&device->link);
++  wl_list_remove(&device->device_destroy.link);
++  free(device);
++}
++
++static void input_handle_device_destroy(struct wl_listener *listener,
++		void *data){
++      struct input_device_v1 *device = wl_container_of(listener, device, device_destroy);
++      input_device_destroy(device);
++}
++
++
++
++void input_calibration_add(struct input_calibration_manager_v1 *manager, struct wlr_input_device *device){
++  struct input_device_v1 *input_dev = calloc(1, sizeof(struct input_device_v1));
++  if (!input_dev) {
++    wlr_log(WLR_ERROR, "Failed to allocate input_device");
++    return;
++  }
++
++  input_dev->manager = manager;
++  input_dev->device = device; 
++
++  wl_list_init(&input_dev->resources);
++  wl_list_insert(&manager->devices, &input_dev->link);
++
++  input_dev->device_destroy.notify = input_handle_device_destroy;
++  wl_signal_add(&device->events.destroy, &input_dev->device_destroy);
++  struct wl_resource *resource;
++  wl_list_for_each(resource, &manager->resources, link) {
++		manager_send_device(manager, input_dev, resource);
++    ext_input_calibration_manager_v1_send_done(resource);
++	}
++}
++
++
++static void input_device_resource_destroy(struct wl_resource *resource) {
++	wl_list_remove(wl_resource_get_link(resource));
++}
++
++
++static void handle_release(struct wl_client *client,
++		struct wl_resource *resource) {
++	wl_resource_destroy(resource);
++}
++
++
++static void handle_map_to_region(struct wl_client *client, struct wl_resource *resource,
++    int32_t x, int32_t y, int32_t width, int32_t height) {
++
++  assert(wl_resource_instance_of(resource,
++		&ext_input_device_v1_interface, &input_device_impl));
++  struct input_device_v1 *input_device = wl_resource_get_user_data(resource);
++  struct cg_seat *seat = input_device->manager->seat;
++
++  wlr_log(WLR_INFO, "input_device %s map_to_region %dx%d+%d+%d", input_device->device->name, width, height, x, y);
++	struct wlr_box box = { .x = x, .y = y, .width=width, .height=height };
++	wlr_cursor_map_input_to_output(seat->cursor, input_device->device, NULL);
++	wlr_cursor_map_input_to_region(seat->cursor, input_device->device, &box);
++}
++
++
++static void handle_map_to_output(struct wl_client *client, struct wl_resource *resource,
++    const char *output_name) {
++
++  assert(wl_resource_instance_of(resource,
++		&ext_input_device_v1_interface, &input_device_impl));
++  struct input_device_v1 *input_device = wl_resource_get_user_data(resource);
++  struct cg_seat *seat = input_device->manager->seat;
++	struct cg_output *output;
++  wl_list_for_each (output, &seat->server->outputs, link) {
++		if (strcmp(output_name, output->wlr_output->name) == 0) {
++			wlr_log(WLR_INFO, "input device %s map to output device %s\n", input_device->device->name,
++				output->wlr_output->name);
++			wlr_cursor_map_input_to_output(seat->cursor, input_device->device, output->wlr_output);
++	    wlr_cursor_map_input_to_region(seat->cursor, input_device->device, NULL);
++			return;
++		}
++	}
++  wl_resource_post_error(resource,
++			EXT_INPUT_DEVICE_V1_ERROR_NO_SUCH_OUTPUT,
++			"Requested output does not exist");
++}
++
++
++static const struct ext_input_device_v1_interface input_device_impl = {
++  .map_to_region = handle_map_to_region,
++  .map_to_output = handle_map_to_output,
++  .release = handle_release,
++};
++
++static void manager_send_device(struct input_calibration_manager_v1 *manager,
++	struct input_device_v1 *input_device, struct wl_resource *manager_resource){
++
++	struct wl_client *client = wl_resource_get_client(manager_resource);
++	uint32_t version = wl_resource_get_version(manager_resource);
++  struct wl_resource *device_resource = wl_resource_create(client,
++		&ext_input_device_v1_interface, version, 0);
++	if (device_resource == NULL) {
++		wl_resource_post_no_memory(manager_resource);
++		return;
++	}
++
++  wl_resource_set_implementation(device_resource, &input_device_impl, input_device,
++		input_device_resource_destroy);
++	wl_list_insert(&input_device->resources, wl_resource_get_link(device_resource));
++
++
++  ext_input_calibration_manager_v1_send_add(manager_resource, device_resource);
++
++  ext_input_device_v1_send_name(device_resource, input_device->device->name);
++  ext_input_device_v1_send_type(device_resource, input_device->device->type);
++
++}
+\ No newline at end of file
+diff --git a/calibration.h b/calibration.h
+new file mode 100644
+index 0000000..2598854
+--- /dev/null
++++ b/calibration.h
+@@ -0,0 +1,13 @@
++#ifndef CG_CALIBRATION_H
++#define CG_CALIBRATION_H
++
++#include "config.h"
++
++struct input_calibration_manager_v1;
++
++struct input_calibration_manager_v1 *create_input_calibration(struct cg_seat *display);
++void input_calibration_add(struct input_calibration_manager_v1 *manager, struct wlr_input_device *device);
++void input_calibration_remove(struct input_calibration_manager_v1 *manager, struct wlr_input_device *device);
++
++
++#endif // CG_CALIBRATION_H
+\ No newline at end of file
+diff --git a/config.h.in b/config.h.in
+index 51137ec..3ee4834 100644
+--- a/config.h.in
++++ b/config.h.in
+@@ -5,4 +5,6 @@
+ 
+ #mesondefine CAGE_VERSION
+ 
++#mesondefine CAGE_HAS_INPUT_CALIBRATION
++
+ #endif
+diff --git a/meson.build b/meson.build
+index 7b58cd8..a987c22 100644
+--- a/meson.build
++++ b/meson.build
+@@ -83,6 +83,7 @@ endif
+ conf_data = configuration_data()
+ conf_data.set10('CAGE_HAS_XWAYLAND', have_xwayland)
+ conf_data.set_quoted('CAGE_VERSION', version)
++conf_data.set10('CAGE_HAS_INPUT_CALIBRATION', get_option('input_calibration').enabled())
+ 
+ scdoc = dependency('scdoc', version: '>=1.9.2', native: true, required: get_option('man-pages'))
+ if scdoc.found()
+@@ -136,6 +137,13 @@ if conf_data.get('CAGE_HAS_XWAYLAND', 0) == 1
+   cage_headers += 'xwayland.h'
+ endif
+ 
++if conf_data.get('CAGE_HAS_INPUT_CALIBRATION', 0) == 1
++  cage_sources += 'protocol/input_calibration.c'
++  cage_sources += 'calibration.c'
++  cage_headers += 'protocol/input_calibration.h'
++  cage_headers += 'calibration.h'
++endif
++
+ executable(
+   meson.project_name(),
+   cage_sources + cage_headers,
+@@ -154,6 +162,7 @@ summary = [
+   'Cage @0@'.format(version),
+   '',
+   '    xwayland: @0@'.format(have_xwayland),
++  '    calibration: @0@'.format(get_option('input_calibration').enabled()),
+   ''
+ ]
+ message('\n'.join(summary))
+diff --git a/meson_options.txt b/meson_options.txt
+index e40a23d..55e4a61 100644
+--- a/meson_options.txt
++++ b/meson_options.txt
+@@ -1 +1,2 @@
+ option('man-pages', type: 'feature', value: 'auto', description: 'Generate and install man pages')
++option('input_calibration', type: 'feature', value: 'disabled', description: 'Enable input calibration interface')
+diff --git a/protocol/input_calibration.c b/protocol/input_calibration.c
+new file mode 100644
+index 0000000..65a21d6
+--- /dev/null
++++ b/protocol/input_calibration.c
+@@ -0,0 +1,82 @@
++/* Generated by wayland-scanner 1.21.0 */
++
++/*
++ * Copyright © 2024 Holusion SAS
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a
++ * copy of this software and associated documentation files (the "Software"),
++ * to deal in the Software without restriction, including without limitation
++ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
++ * and/or sell copies of the Software, and to permit persons to whom the
++ * Software is furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice (including the next
++ * paragraph) shall be included in all copies or substantial portions of the
++ * Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
++ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
++ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
++ * DEALINGS IN THE SOFTWARE.
++ */
++
++#include <stdlib.h>
++#include <stdint.h>
++#include "wayland-util.h"
++
++#ifndef __has_attribute
++# define __has_attribute(x) 0  /* Compatibility with non-clang compilers. */
++#endif
++
++#if (__has_attribute(visibility) || defined(__GNUC__) && __GNUC__ >= 4)
++#define WL_PRIVATE __attribute__ ((visibility("hidden")))
++#else
++#define WL_PRIVATE
++#endif
++
++extern const struct wl_interface ext_input_device_v1_interface;
++
++static const struct wl_interface *ext_input_device_calibration_unstable_v1_types[] = {
++	NULL,
++	NULL,
++	NULL,
++	NULL,
++	&ext_input_device_v1_interface,
++};
++
++static const struct wl_message ext_input_calibration_manager_v1_requests[] = {
++	{ "destroy", "", ext_input_device_calibration_unstable_v1_types + 0 },
++};
++
++static const struct wl_message ext_input_calibration_manager_v1_events[] = {
++	{ "add", "n", ext_input_device_calibration_unstable_v1_types + 4 },
++	{ "done", "", ext_input_device_calibration_unstable_v1_types + 0 },
++};
++
++WL_PRIVATE const struct wl_interface ext_input_calibration_manager_v1_interface = {
++	"ext_input_calibration_manager_v1", 1,
++	1, ext_input_calibration_manager_v1_requests,
++	2, ext_input_calibration_manager_v1_events,
++};
++
++static const struct wl_message ext_input_device_v1_requests[] = {
++	{ "release", "", ext_input_device_calibration_unstable_v1_types + 0 },
++	{ "map_to_region", "iiii", ext_input_device_calibration_unstable_v1_types + 0 },
++	{ "map_to_output", "s", ext_input_device_calibration_unstable_v1_types + 0 },
++};
++
++static const struct wl_message ext_input_device_v1_events[] = {
++	{ "removed", "", ext_input_device_calibration_unstable_v1_types + 0 },
++	{ "name", "s", ext_input_device_calibration_unstable_v1_types + 0 },
++	{ "type", "i", ext_input_device_calibration_unstable_v1_types + 0 },
++};
++
++WL_PRIVATE const struct wl_interface ext_input_device_v1_interface = {
++	"ext_input_device_v1", 1,
++	3, ext_input_device_v1_requests,
++	3, ext_input_device_v1_events,
++};
++
+diff --git a/protocol/input_calibration.h b/protocol/input_calibration.h
+new file mode 100644
+index 0000000..b0c3bb5
+--- /dev/null
++++ b/protocol/input_calibration.h
+@@ -0,0 +1,317 @@
++/* Generated by wayland-scanner 1.21.0 */
++
++#ifndef EXT_INPUT_DEVICE_CALIBRATION_UNSTABLE_V1_SERVER_PROTOCOL_H
++#define EXT_INPUT_DEVICE_CALIBRATION_UNSTABLE_V1_SERVER_PROTOCOL_H
++
++#include <stdint.h>
++#include <stddef.h>
++#include "wayland-server.h"
++
++#ifdef  __cplusplus
++extern "C" {
++#endif
++
++struct wl_client;
++struct wl_resource;
++
++/**
++ * @page page_ext_input_device_calibration_unstable_v1 The ext_input_device_calibration_unstable_v1 protocol
++ * Protocol to handle input devices dynamic calibration
++ *
++ * @section page_desc_ext_input_device_calibration_unstable_v1 Description
++ *
++ * This protocol allows dynamic calibration of input devices by the clients.
++ *
++ * Typically absolute input devices (such as touchscreens) need to be mapped
++ * to once specific output in case of multiple outputs setups. However the 
++ * compositor may not have enough information to do this mapping. This protocol
++ * allows client to make this decision using external knowledge.
++ *
++ * Warning! The protocol described in this file is experimental and
++ * backward incompatible changes may be made. Backward compatible
++ * changes may be added together with the corresponding interface
++ * version bump.
++ *
++ * @section page_ifaces_ext_input_device_calibration_unstable_v1 Interfaces
++ * - @subpage page_iface_ext_input_calibration_manager_v1 - manage input devices calibration
++ * - @subpage page_iface_ext_input_device_v1 - compositor input device
++ * @section page_copyright_ext_input_device_calibration_unstable_v1 Copyright
++ * <pre>
++ *
++ * Copyright © 2024 Holusion SAS
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a
++ * copy of this software and associated documentation files (the "Software"),
++ * to deal in the Software without restriction, including without limitation
++ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
++ * and/or sell copies of the Software, and to permit persons to whom the
++ * Software is furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice (including the next
++ * paragraph) shall be included in all copies or substantial portions of the
++ * Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
++ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
++ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
++ * DEALINGS IN THE SOFTWARE.
++ * </pre>
++ */
++struct ext_input_calibration_manager_v1;
++struct ext_input_device_v1;
++
++#ifndef EXT_INPUT_CALIBRATION_MANAGER_V1_INTERFACE
++#define EXT_INPUT_CALIBRATION_MANAGER_V1_INTERFACE
++/**
++ * @page page_iface_ext_input_calibration_manager_v1 ext_input_calibration_manager_v1
++ * @section page_iface_ext_input_calibration_manager_v1_desc Description
++ *
++ * A global factory interface for input_device objects.
++ * @section page_iface_ext_input_calibration_manager_v1_api API
++ * See @ref iface_ext_input_calibration_manager_v1.
++ */
++/**
++ * @defgroup iface_ext_input_calibration_manager_v1 The ext_input_calibration_manager_v1 interface
++ *
++ * A global factory interface for input_device objects.
++ */
++extern const struct wl_interface ext_input_calibration_manager_v1_interface;
++#endif
++#ifndef EXT_INPUT_DEVICE_V1_INTERFACE
++#define EXT_INPUT_DEVICE_V1_INTERFACE
++/**
++ * @page page_iface_ext_input_device_v1 ext_input_device_v1
++ * @section page_iface_ext_input_device_v1_desc Description
++ *
++ * An ext_input_device object represents an input device in the compositor.
++ * @section page_iface_ext_input_device_v1_api API
++ * See @ref iface_ext_input_device_v1.
++ */
++/**
++ * @defgroup iface_ext_input_device_v1 The ext_input_device_v1 interface
++ *
++ * An ext_input_device object represents an input device in the compositor.
++ */
++extern const struct wl_interface ext_input_device_v1_interface;
++#endif
++
++/**
++ * @ingroup iface_ext_input_calibration_manager_v1
++ * @struct ext_input_calibration_manager_v1_interface
++ */
++struct ext_input_calibration_manager_v1_interface {
++	/**
++	 * destroy the ext_input_calibration_manager object
++	 *
++	 * Using this request a client can tell the server that it is not
++	 * going to use the object anymore.
++	 */
++	void (*destroy)(struct wl_client *client,
++			struct wl_resource *resource);
++};
++
++#define EXT_INPUT_CALIBRATION_MANAGER_V1_ADD 0
++#define EXT_INPUT_CALIBRATION_MANAGER_V1_DONE 1
++
++/**
++ * @ingroup iface_ext_input_calibration_manager_v1
++ */
++#define EXT_INPUT_CALIBRATION_MANAGER_V1_ADD_SINCE_VERSION 1
++/**
++ * @ingroup iface_ext_input_calibration_manager_v1
++ */
++#define EXT_INPUT_CALIBRATION_MANAGER_V1_DONE_SINCE_VERSION 1
++
++/**
++ * @ingroup iface_ext_input_calibration_manager_v1
++ */
++#define EXT_INPUT_CALIBRATION_MANAGER_V1_DESTROY_SINCE_VERSION 1
++
++/**
++ * @ingroup iface_ext_input_calibration_manager_v1
++ * Sends an add event to the client owning the resource.
++ * @param resource_ The client's resource
++ * @param id the new input device
++ */
++static inline void
++ext_input_calibration_manager_v1_send_add(struct wl_resource *resource_, struct wl_resource *id)
++{
++	wl_resource_post_event(resource_, EXT_INPUT_CALIBRATION_MANAGER_V1_ADD, id);
++}
++
++/**
++ * @ingroup iface_ext_input_calibration_manager_v1
++ * Sends an done event to the client owning the resource.
++ * @param resource_ The client's resource
++ */
++static inline void
++ext_input_calibration_manager_v1_send_done(struct wl_resource *resource_)
++{
++	wl_resource_post_event(resource_, EXT_INPUT_CALIBRATION_MANAGER_V1_DONE);
++}
++
++#ifndef EXT_INPUT_DEVICE_V1_ERROR_ENUM
++#define EXT_INPUT_DEVICE_V1_ERROR_ENUM
++enum ext_input_device_v1_error {
++	/**
++	 * requested output name was not found
++	 */
++	EXT_INPUT_DEVICE_V1_ERROR_NO_SUCH_OUTPUT = 1,
++	/**
++	 * could not match the requested boundaries
++	 */
++	EXT_INPUT_DEVICE_V1_ERROR_BAD_BOUNDARIES = 2,
++	/**
++	 * request sent after configuration has been applied or tested
++	 */
++	EXT_INPUT_DEVICE_V1_ERROR_ALREADY_USED = 3,
++};
++#endif /* EXT_INPUT_DEVICE_V1_ERROR_ENUM */
++
++#ifndef EXT_INPUT_DEVICE_V1_TYPES_ENUM
++#define EXT_INPUT_DEVICE_V1_TYPES_ENUM
++enum ext_input_device_v1_types {
++	/**
++	 * keyboard device
++	 */
++	EXT_INPUT_DEVICE_V1_TYPES_KEYBOARD = 0,
++	/**
++	 * pointer (typ. mouse) device
++	 */
++	EXT_INPUT_DEVICE_V1_TYPES_POINTER = 1,
++	/**
++	 * touchscreen / trackpad device
++	 */
++	EXT_INPUT_DEVICE_V1_TYPES_TOUCH = 2,
++	/**
++	 * tablet tool device
++	 */
++	EXT_INPUT_DEVICE_V1_TYPES_TABLET_TOOL = 3,
++	/**
++	 * tablet pad device
++	 */
++	EXT_INPUT_DEVICE_V1_TYPES_TABLET_PAD = 4,
++	/**
++	 * switch device
++	 */
++	EXT_INPUT_DEVICE_V1_TYPES_SWITCH = 5,
++};
++#endif /* EXT_INPUT_DEVICE_V1_TYPES_ENUM */
++
++/**
++ * @ingroup iface_ext_input_device_v1
++ * @struct ext_input_device_v1_interface
++ */
++struct ext_input_device_v1_interface {
++	/**
++	 * release the ext_input_device object
++	 *
++	 * Using this request a client can tell the server that it is not
++	 * going to use the object anymore.
++	 */
++	void (*release)(struct wl_client *client,
++			struct wl_resource *resource);
++	/**
++	 * map the input device to a box
++	 *
++	 * Asks the compositor to map the input device's absolute
++	 * coordinates to a rectangle in output space
++	 * @param width width in pixels of the box
++	 * @param height width in pixels of the box
++	 * @param x x position of the box
++	 * @param y y position of the box
++	 */
++	void (*map_to_region)(struct wl_client *client,
++			      struct wl_resource *resource,
++			      int32_t width,
++			      int32_t height,
++			      int32_t x,
++			      int32_t y);
++	/**
++	 * map the input device to an output device
++	 *
++	 * Asks the compositor to map the input device's absolute
++	 * coordinates to an output device's on-screen position.
++	 *
++	 * The output name should be the value reported by xdg_output.name
++	 * and zwlr_output_head_v1.name
++	 * @param output output name to map to
++	 */
++	void (*map_to_output)(struct wl_client *client,
++			      struct wl_resource *resource,
++			      const char *output);
++};
++
++#define EXT_INPUT_DEVICE_V1_REMOVED 0
++#define EXT_INPUT_DEVICE_V1_NAME 1
++#define EXT_INPUT_DEVICE_V1_TYPE 2
++
++/**
++ * @ingroup iface_ext_input_device_v1
++ */
++#define EXT_INPUT_DEVICE_V1_REMOVED_SINCE_VERSION 1
++/**
++ * @ingroup iface_ext_input_device_v1
++ */
++#define EXT_INPUT_DEVICE_V1_NAME_SINCE_VERSION 1
++/**
++ * @ingroup iface_ext_input_device_v1
++ */
++#define EXT_INPUT_DEVICE_V1_TYPE_SINCE_VERSION 1
++
++/**
++ * @ingroup iface_ext_input_device_v1
++ */
++#define EXT_INPUT_DEVICE_V1_RELEASE_SINCE_VERSION 1
++/**
++ * @ingroup iface_ext_input_device_v1
++ */
++#define EXT_INPUT_DEVICE_V1_MAP_TO_REGION_SINCE_VERSION 1
++/**
++ * @ingroup iface_ext_input_device_v1
++ */
++#define EXT_INPUT_DEVICE_V1_MAP_TO_OUTPUT_SINCE_VERSION 1
++
++/**
++ * @ingroup iface_ext_input_device_v1
++ * Sends an removed event to the client owning the resource.
++ * @param resource_ The client's resource
++ */
++static inline void
++ext_input_device_v1_send_removed(struct wl_resource *resource_)
++{
++	wl_resource_post_event(resource_, EXT_INPUT_DEVICE_V1_REMOVED);
++}
++
++/**
++ * @ingroup iface_ext_input_device_v1
++ * Sends an name event to the client owning the resource.
++ * @param resource_ The client's resource
++ * @param name input name
++ */
++static inline void
++ext_input_device_v1_send_name(struct wl_resource *resource_, const char *name)
++{
++	wl_resource_post_event(resource_, EXT_INPUT_DEVICE_V1_NAME, name);
++}
++
++/**
++ * @ingroup iface_ext_input_device_v1
++ * Sends an type event to the client owning the resource.
++ * @param resource_ The client's resource
++ * @param type input type
++ */
++static inline void
++ext_input_device_v1_send_type(struct wl_resource *resource_, int32_t type)
++{
++	wl_resource_post_event(resource_, EXT_INPUT_DEVICE_V1_TYPE, type);
++}
++
++#ifdef  __cplusplus
++}
++#endif
++
++#endif
+diff --git a/protocol/input_calibration.xml b/protocol/input_calibration.xml
+new file mode 100644
+index 0000000..e5b11df
+--- /dev/null
++++ b/protocol/input_calibration.xml
+@@ -0,0 +1,152 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<protocol name="ext_input_device_calibration_unstable_v1">
++
++  <copyright>
++    Copyright © 2024 Holusion SAS
++
++    Permission is hereby granted, free of charge, to any person obtaining a
++    copy of this software and associated documentation files (the "Software"),
++    to deal in the Software without restriction, including without limitation
++    the rights to use, copy, modify, merge, publish, distribute, sublicense,
++    and/or sell copies of the Software, and to permit persons to whom the
++    Software is furnished to do so, subject to the following conditions:
++
++    The above copyright notice and this permission notice (including the next
++    paragraph) shall be included in all copies or substantial portions of the
++    Software.
++
++    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
++    THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
++    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
++    DEALINGS IN THE SOFTWARE.
++  </copyright>
++
++  <description summary="Protocol to handle input devices dynamic calibration">
++    This protocol allows dynamic calibration of input devices by the clients.
++
++    Typically absolute input devices (such as touchscreens) need to be mapped
++    to once specific output in case of multiple outputs setups. However the 
++    compositor may not have enough information to do this mapping. This protocol
++    allows client to make this decision using external knowledge.
++
++    Warning! The protocol described in this file is experimental and
++    backward incompatible changes may be made. Backward compatible
++    changes may be added together with the corresponding interface
++    version bump.
++  </description>
++
++  <interface name="ext_input_calibration_manager_v1" version="1">
++    <description summary="manage input devices calibration">
++      A global factory interface for input_device objects.
++    </description>
++
++    <request name="destroy" type="destructor">
++      <description summary="destroy the ext_input_calibration_manager object">
++	      Using this request a client can tell the server that it is not
++	      going to use the object anymore.
++      </description>
++    </request>
++
++    <event name="add">
++      <description summary="new input device">
++        This event is sent when a new input device is added
++      </description>
++      <arg name="id" type="new_id" interface="ext_input_device_v1"
++        summary="the new input device"/>
++    </event>
++
++    <event name="done">
++      <description summary="sent all information about active inputs">
++        This event is sent after all information has been sent after binding to
++        the output manager object and after any subsequent changes. This applies
++        to child devices as well. In other words, this event is sent whenever a
++        head or mode is created or destroyed and whenever one of their properties
++        has been changed. Not all state is re-sent each time the current
++        configuration changes: only the actual changes are sent.
++
++        This allows changes to the input configuration to be seen as atomic,
++        even if they happen via multiple events.
++
++      </description>
++    </event>
++  </interface>
++
++  <interface name="ext_input_device_v1" version="1">
++    <description summary="compositor input device">
++      An ext_input_device object represents an input device in the compositor.
++    </description>
++
++    <enum name="error">
++      <entry name="no_such_output" value="1"
++        summary="requested output name was not found"/>
++      <entry name="bad_boundaries" value="2"
++        summary="could not match the requested boundaries"/>
++      <entry name="already_used" value="3"
++        summary="request sent after configuration has been applied or tested"/>
++    </enum>
++
++    <enum name="types">
++      <entry name="keyboard" value="0" summary="keyboard device"/>
++      <entry name="pointer" value="1" summary="pointer (typ. mouse) device"/>
++      <entry name="touch" value="2" summary="touchscreen / trackpad device"/>
++      <entry name="tablet_tool" value="3" summary="tablet tool device"/>
++      <entry name="tablet_pad" value="4" summary="tablet pad device"/>
++      <entry name="switch" value="5" summary="switch device"/>
++    </enum>
++
++    <request name="release" type="destructor">
++      <description summary="release the ext_input_device object">
++        Using this request a client can tell the server that it is not
++        going to use the object anymore.
++      </description>
++    </request>
++
++    <request name="map_to_region">
++      <description summary="map the input device to a box">
++        Asks the compositor to map the input device's absolute coordinates to a
++        rectangle in output space
++      </description>
++      <arg name="width" type="int" summary="width in pixels of the box"/>
++      <arg name="height" type="int" summary="width in pixels of the box"/>
++      <arg name="x" type="int" summary="x position of the box"/>
++      <arg name="y" type="int" summary="y position of the box"/>
++    </request>
++
++    <request name="map_to_output">
++      <description summary="map the input device to an output device">
++        Asks the compositor to map the input device's absolute coordinates to an
++        output device's on-screen position.
++
++        The output name should be the value reported by xdg_output.name and zwlr_output_head_v1.name
++      </description>
++      <arg name="output" type="string" summary="output name to map to"/>
++    </request>
++
++    <event name="removed">
++      <description summary="input device removed">
++        This event is sent when the input device is removed
++        Clients should release it.
++      </description>
++    </event>
++
++    <event name="name">
++      <description summary="The input device's name">
++        An input device will generally have a manufacturer's defined name
++        describing the device. This event provides that name.
++      </description>
++      <arg name="name" type="string" summary="input name"/>
++    </event>
++
++    <event name="type">
++      <description summary="The input device's type">
++        An input device will have a type, such as "touch" or "pointer"
++      </description>
++      <arg name="type" type="int" enum="ext_input_device_v1.types" summary="input type"/>
++    </event>
++    <!-- Add other device properties -->
++    
++  </interface>
++</protocol>
+diff --git a/seat.c b/seat.c
+index ea80f11..de10951 100644
+--- a/seat.c
++++ b/seat.c
+@@ -42,6 +42,10 @@
+ #if CAGE_HAS_XWAYLAND
+ #include "xwayland.h"
+ #endif
++#if CAGE_HAS_INPUT_CALIBRATION
++#include "calibration.h"
++#endif
++
+ 
+ static void drag_icon_update_position(struct cg_drag_icon *drag_icon);
+ 
+@@ -138,7 +142,6 @@ static void
+ map_input_device_to_output(struct cg_seat *seat, struct wlr_input_device *device, const char *output_name)
+ {
+ 	if (!output_name) {
+-		wlr_log(WLR_INFO, "Input device %s cannot be mapped to an output device\n", device->name);
+ 		return;
+ 	}
+ 
+@@ -187,6 +190,7 @@ handle_new_touch(struct cg_seat *seat, struct wlr_touch *wlr_touch)
+ 	wl_signal_add(&wlr_touch->base.events.destroy, &touch->destroy);
+ 
+ 	map_input_device_to_output(seat, &wlr_touch->base, wlr_touch->output_name);
++
+ }
+ 
+ static void
+@@ -427,6 +431,7 @@ handle_new_input(struct wl_listener *listener, void *data)
+ {
+ 	struct cg_seat *seat = wl_container_of(listener, seat, new_input);
+ 	struct wlr_input_device *device = data;
++	wlr_log(WLR_DEBUG, "Handle new input device %s", device->name);
+ 
+ 	switch (device->type) {
+ 	case WLR_INPUT_DEVICE_KEYBOARD:
+@@ -448,6 +453,10 @@ handle_new_input(struct wl_listener *listener, void *data)
+ 	}
+ 
+ 	update_capabilities(seat);
++#if CAGE_HAS_INPUT_CALIBRATION
++		input_calibration_add(seat->input_calibration_manager, device);
++#endif
++
+ }
+ 
+ static void
+@@ -825,6 +834,17 @@ seat_create(struct cg_server *server, struct wlr_backend *backend)
+ 	}
+ 	wlr_cursor_attach_output_layout(seat->cursor, server->output_layout);
+ 
++
++#if CAGE_HAS_INPUT_CALIBRATION
++	seat->input_calibration_manager = create_input_calibration(seat);
++	if (!seat->input_calibration_manager) {
++		wlr_log(WLR_ERROR, "Unable to create the input calibration manager");
++		wl_list_remove(&seat->destroy.link);
++		free(seat);
++		return NULL;
++	}
++#endif
++
+ 	if (!seat->xcursor_manager) {
+ 		seat->xcursor_manager = wlr_xcursor_manager_create(NULL, XCURSOR_SIZE);
+ 		if (!seat->xcursor_manager) {
+diff --git a/seat.h b/seat.h
+index 4b7bfda..f7d0dff 100644
+--- a/seat.h
++++ b/seat.h
+@@ -10,6 +10,9 @@
+ 
+ #include "server.h"
+ #include "view.h"
++#ifdef CAGE_HAS_INPUT_CALIBRATION
++#include "calibration.h"
++#endif
+ 
+ #define DEFAULT_XCURSOR "left_ptr"
+ #define XCURSOR_SIZE 24
+@@ -17,6 +20,10 @@
+ struct cg_seat {
+ 	struct wlr_seat *seat;
+ 	struct cg_server *server;
++#ifdef CAGE_HAS_INPUT_CALIBRATION
++	struct input_calibration_manager_v1 *input_calibration_manager;
++#endif
++
+ 	struct wl_listener destroy;
+ 
+ 	struct wl_list keyboards;
+-- 
+2.39.5
+

@@ -1,0 +1,38 @@
+name: Artefact builder
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - v*.*.*
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build
+        run: |
+          docker buildx build --platform linux/amd64,linux/arm64,linux/arm/v7 --output=type=local,dest=dist .
+          mv dist/linux_amd64/cage dist/cage-amd64
+          mv dist/linux_arm64/cage dist/cage-arm64
+          mv dist/linux_arm_v7/cage dist/cage-armhf
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cage-binaries
+          path: dist/cage-*
+          retention-days: 1
+      - name: create release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: "dist/cage-*"
+          token: ${{ secrets.GITHUB_TOKEN }}

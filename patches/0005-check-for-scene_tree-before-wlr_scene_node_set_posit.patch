@@ -1,0 +1,27 @@
+From d3c3446901e29d009c548d01d657fc95d159c4bf Mon Sep 17 00:00:00 2001
+From: Sebastien DUMETZ <s.dumetz@holusion.com>
+Date: Tue, 5 Nov 2024 12:19:48 +0100
+Subject: [PATCH 5/6] check for scene_tree before wlr_scene_node_set_position
+
+---
+ view.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/view.c b/view.c
+index c088441..c01595b 100644
+--- a/view.c
++++ b/view.c
+@@ -103,7 +103,9 @@ view_position(struct cg_view *view)
+ 	}else{
+ 		wlr_log(WLR_INFO, "view_position %dx%d+%d+%d",geom.width, geom.height, view->lx, view->ly);
+ 	}
+-	wlr_scene_node_set_position(&view->scene_tree->node, view->lx, view->ly);
++	if (view->scene_tree) {
++		wlr_scene_node_set_position(&view->scene_tree->node, view->lx, view->ly);
++	}
+ 	/*
+ 	if (view_is_primary(view) || view_extends_output_layout(view, &layout_box)) {
+ 		view_maximize(view, &layout_box);
+-- 
+2.39.5
+

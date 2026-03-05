@@ -1,0 +1,25 @@
+From 1db4d43e7b2939d2f3691f3f3facd67a90cd8116 Mon Sep 17 00:00:00 2001
+From: Sebastien DUMETZ <s.dumetz@holusion.com>
+Date: Fri, 19 Apr 2024 15:42:07 +0200
+Subject: [PATCH 3/6] set focus on every view that asks it
+
+---
+ seat.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/seat.c b/seat.c
+index cdf8798..ea80f11 100644
+--- a/seat.c
++++ b/seat.c
+@@ -934,7 +934,7 @@ seat_set_focus(struct cg_seat *seat, struct cg_view *view)
+ 
+ 	/* Move the view to the front, but only if it isn't a
+ 	   fullscreen view. */
+-	if (!view_is_primary(view)) {
++	/*if (!view_is_primary(view))*/ {
+ 		wl_list_remove(&view->link);
+ 		wl_list_insert(&server->views, &view->link);
+ 	}
+-- 
+2.39.5
+

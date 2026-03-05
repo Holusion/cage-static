@@ -1,0 +1,27 @@
+From 3ef11b50e672fcba2eb0a2aba693c0e63f7c255b Mon Sep 17 00:00:00 2001
+From: Sebastien DUMETZ <s.dumetz@holusion.com>
+Date: Tue, 5 Nov 2024 12:20:16 +0100
+Subject: [PATCH 6/6] fix XDG shell geometry report
+
+---
+ xdg_shell.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/xdg_shell.c b/xdg_shell.c
+index ebd1e6c..0c5865a 100644
+--- a/xdg_shell.c
++++ b/xdg_shell.c
+@@ -141,8 +141,8 @@ static void get_position(struct cg_view *view, int *x_out, int *y_out)
+ 	struct wlr_box geom;
+ 
+ 	wlr_xdg_surface_get_geometry(xdg_shell_view->xdg_toplevel->base, &geom);
+-	*x_out = geom.width;
+-	*y_out = geom.height;
++	*x_out = geom.x;
++	*y_out = geom.y;
+ }
+ 
+ 
+-- 
+2.39.5
+

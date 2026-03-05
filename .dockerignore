@@ -1,0 +1,4 @@
+# Don't send the git clone or build artifacts into the Docker context
+cage/
+_build_tree/
+.git/
