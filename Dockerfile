@@ -1,8 +1,6 @@
 FROM debian:12-slim AS build
 #debian 12 "bookworm" is required to have a recent-enough built-in meson.
 # backports are required for a recent-enough libdrm
-ARG CAGE_REPO="https://github.com/cage-kiosk/cage"
-ARG CAGE_REF="v0.2.0"
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV GIT_TERMINAL_PROMPT=0
@@ -15,10 +13,15 @@ RUN  apt-get -qqy update \
     build-essential \
     cmake \
     pkgconf \
-    meson \
     ninja-build \
+    python3 \
+    python3-pip \
+    python3-setuptools \
+    python3-wheel \
   && rm -rf /var/lib/apt/lists/*
 
+# Install meson from pip because wlroots tends to require an up to date version
+RUN pip3 install --break-system-packages --no-cache-dir meson
 
 # Wayland build-deps
 # They are all wayland-scanner dependencies that are no longer required once the build completes
@@ -69,9 +72,14 @@ RUN  apt-get -qqy update \
   libxcb-ewmh-dev \
 && rm -rf /var/lib/apt/lists/*
 
+ARG CAGE_REPO="https://github.com/cage-kiosk/cage"
+ARG CAGE_REF="v0.2.1"
+
 RUN git clone --depth 1 --filter=blob:none --branch "${CAGE_REF}" "${CAGE_REPO}" "/cage"
 
 WORKDIR /cage
+
+
 
 COPY "subprojects" "/cage/subprojects"
 

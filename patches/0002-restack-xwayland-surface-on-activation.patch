@@ -1,14 +1,14 @@
-From 9dc9fbdf78afbe46b00672be14a9cbf781c9b23b Mon Sep 17 00:00:00 2001
+From 8760bf0c371bd87b793b57fd9261245459b602ee Mon Sep 17 00:00:00 2001
 From: Sebastien DUMETZ <s.dumetz@holusion.com>
 Date: Fri, 19 Apr 2024 15:34:09 +0200
-Subject: [PATCH 2/6] restack xwayland surface on activation
+Subject: [PATCH 2/5] restack xwayland surface on activation
 
 ---
  xwayland.c | 1 +
  1 file changed, 1 insertion(+)
 
 diff --git a/xwayland.c b/xwayland.c
-index 30749d5..ae4612a 100644
+index 3968dcb..53eac1e 100644
 --- a/xwayland.c
 +++ b/xwayland.c
 @@ -99,6 +99,7 @@ activate(struct cg_view *view, bool activate)

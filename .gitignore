@@ -4,5 +4,6 @@
 !/subprojects/*.wrap
 !/subprojects/packagecache
 !/subprojects/packagecache/.placeholder
-!/subprojects/packagefiles
-!/subprojects/packagefiles/*.patch
+!/subprojects/packagefiles/
+!/subprojects/packagefiles/*/
+!/subprojects/packagefiles/**/*.patch

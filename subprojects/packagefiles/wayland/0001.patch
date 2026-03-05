@@ -1,0 +1,19 @@
+--- wayland-1.23.1/src/meson.build
++++ "patch/src/meson.build"
+@@ -29,7 +29,7 @@
+ if get_option('scanner')
+ 	# wayland-scanner
+ 
+-	scanner_deps = [ dependency('expat') ]
++	scanner_deps = [ dependency('expat', static: false) ]
+ 	scanner_args = [ '-include', 'config.h' ]
+ 
+ 	if get_option('dtd_validation')
+@@ -54,6 +54,7 @@
+ 		'wayland-scanner',
+ 		wayland_scanner_sources,
+ 		c_args: scanner_args,
++		link_args: [ '-lstdc++' ],
+ 		include_directories: wayland_scanner_includes,
+ 		dependencies: [ scanner_deps, wayland_util_dep, ],
+ 		install: true

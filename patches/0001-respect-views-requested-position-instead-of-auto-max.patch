@@ -1,7 +1,7 @@
-From 0efe5dba22d8aa6f29fb151efa007619ac00ef88 Mon Sep 17 00:00:00 2001
+From a122a7657f12a352ca1ab8880c46f0bf777511ea Mon Sep 17 00:00:00 2001
 From: Sebastien DUMETZ <s.dumetz@holusion.com>
 Date: Wed, 10 Apr 2024 14:49:31 +0200
-Subject: [PATCH 1/6] respect views requested position instead of auto
+Subject: [PATCH 1/5] respect views requested position instead of auto
  maximizing
 
 ---
@@ -61,28 +61,28 @@ index 9b2ab75..6610c0b 100644
  	bool (*is_transient_for)(struct cg_view *child, struct cg_view *parent);
  	void (*activate)(struct cg_view *view, bool activate);
 diff --git a/xdg_shell.c b/xdg_shell.c
-index cae6c90..ebd1e6c 100644
+index 5493918..baa745c 100644
 --- a/xdg_shell.c
 +++ b/xdg_shell.c
-@@ -135,6 +135,17 @@ get_geometry(struct cg_view *view, int *width_out, int *height_out)
- 	*height_out = geom.height;
+@@ -134,6 +134,17 @@ get_geometry(struct cg_view *view, int *width_out, int *height_out)
+ 	*height_out = xdg_surface->geometry.height;
  }
  
-+static void get_position(struct cg_view *view, int *x_out, int *y_out)
++static void 
++get_position(struct cg_view *view, int *x_out, int *y_out)
 +{
 +	struct cg_xdg_shell_view *xdg_shell_view = xdg_shell_view_from_view(view);
-+	struct wlr_box geom;
++	struct wlr_xdg_surface *xdg_surface = xdg_shell_view->xdg_toplevel->base;
 +
-+	wlr_xdg_surface_get_geometry(xdg_shell_view->xdg_toplevel->base, &geom);
-+	*x_out = geom.width;
-+	*y_out = geom.height;
++	*x_out = xdg_surface->geometry.x;
++	*y_out = xdg_surface->geometry.y;
 +}
 +
 +
  static bool
  is_primary(struct cg_view *view)
  {
-@@ -252,6 +263,7 @@ handle_xdg_shell_surface_destroy(struct wl_listener *listener, void *data)
+@@ -253,6 +264,7 @@ handle_xdg_toplevel_destroy(struct wl_listener *listener, void *data)
  static const struct cg_view_impl xdg_shell_view_impl = {
  	.get_title = get_title,
  	.get_geometry = get_geometry,
@@ -91,7 +91,7 @@ index cae6c90..ebd1e6c 100644
  	.is_transient_for = is_transient_for,
  	.activate = activate,
 diff --git a/xwayland.c b/xwayland.c
-index de81408..30749d5 100644
+index 3df7a08..3968dcb 100644
 --- a/xwayland.c
 +++ b/xwayland.c
 @@ -52,6 +52,21 @@ get_geometry(struct cg_view *view, int *width_out, int *height_out)
