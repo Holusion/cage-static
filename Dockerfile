@@ -18,6 +18,7 @@ RUN  apt-get -qqy update \
     python3-pip \
     python3-setuptools \
     python3-wheel \
+    bison \
   && rm -rf /var/lib/apt/lists/*
 
 # Install meson from pip because wlroots tends to require an up to date version
@@ -52,8 +53,8 @@ RUN  apt-get -qqy update \
   libinput-dev \
   libpixman-1-dev \
   libpng-dev \
-  libseat-dev \
-  libsystemd-dev\
+  libudev-dev \
+  libsystemd-dev \
   libxcb1-dev \
   libxcb-composite0-dev \
   libxcb-dri3-dev \
@@ -66,7 +67,6 @@ RUN  apt-get -qqy update \
   libxcb-xfixes0-dev \
   libxcb-xinput-dev \
   libx11-xcb-dev \
-  libxkbcommon-dev \
   hwdata \
   xwayland \
   libxcb-ewmh-dev \
