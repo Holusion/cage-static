@@ -1,7 +1,7 @@
 From 42642450fe7b0dd09cfa0ca64caf23ae12ee242b Mon Sep 17 00:00:00 2001
 From: Sebastien DUMETZ <s.dumetz@holusion.com>
 Date: Tue, 5 Nov 2024 12:19:48 +0100
-Subject: [PATCH 5/5] check for scene_tree before wlr_scene_node_set_position
+Subject: [PATCH 5/6] check for scene_tree before wlr_scene_node_set_position
 
 ---
  view.c | 4 +++-

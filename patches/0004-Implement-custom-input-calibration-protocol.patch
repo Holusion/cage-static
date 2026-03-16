@@ -1,7 +1,7 @@
 From 5e7d19d376bf47679cbce70330dd943c5bb9b5fa Mon Sep 17 00:00:00 2001
 From: Sebastien DUMETZ <s.dumetz@holusion.com>
 Date: Wed, 17 Apr 2024 16:54:39 +0200
-Subject: [PATCH 4/5] Implement custom input calibration protocol
+Subject: [PATCH 4/6] Implement custom input calibration protocol
 
 ---
  calibration.c                  | 236 ++++++++++++++++++++++++

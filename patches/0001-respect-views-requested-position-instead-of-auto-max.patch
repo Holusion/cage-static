@@ -1,7 +1,7 @@
 From a122a7657f12a352ca1ab8880c46f0bf777511ea Mon Sep 17 00:00:00 2001
 From: Sebastien DUMETZ <s.dumetz@holusion.com>
 Date: Wed, 10 Apr 2024 14:49:31 +0200
-Subject: [PATCH 1/5] respect views requested position instead of auto
+Subject: [PATCH 1/6] respect views requested position instead of auto
  maximizing
 
 ---
