@@ -1,0 +1,24 @@
+From 730e6632aeae83909fcbee1edbd4ebea4ce803d4 Mon Sep 17 00:00:00 2001
+From: Sebastien DUMETZ <s.dumetz@holusion.com>
+Date: Wed, 18 Mar 2026 09:21:13 +0100
+Subject: [PATCH] fix probable leak from cursor hide timer
+
+---
+ seat.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/seat.c b/seat.c
+index 6fff712..295803a 100644
+--- a/seat.c
++++ b/seat.c
+@@ -829,6 +829,7 @@ handle_destroy(struct wl_listener *listener, void *data)
+ 	if (seat->cage_cursor->cursor) {
+ 		wlr_cursor_destroy(seat->cage_cursor->cursor);
+ 	}
++	wl_event_source_remove(seat->cage_cursor->hide_cursor_timer);
+ 	free(seat->cage_cursor);
+ 	free(seat);
+ }
+-- 
+2.39.5
+

@@ -1,0 +1,31 @@
+From dc8cfc870249d74d62894d638d6f40a43829b7ba Mon Sep 17 00:00:00 2001
+From: Sebastien DUMETZ <s.dumetz@holusion.com>
+Date: Wed, 18 Mar 2026 09:20:43 +0100
+Subject: [PATCH] fix crash when destroying a xwayland surface
+
+---
+ xwayland.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/xwayland.c b/xwayland.c
+index 53eac1e..e534920 100644
+--- a/xwayland.c
++++ b/xwayland.c
+@@ -156,6 +156,14 @@ handle_xwayland_surface_destroy(struct wl_listener *listener, void *data)
+ 	struct cg_view *view = &xwayland_view->view;
+ 
+ 	wl_list_remove(&xwayland_view->destroy.link);
++	wl_list_remove(&xwayland_view->associate.link);
++	wl_list_remove(&xwayland_view->dissociate.link);
++	if (xwayland_view->map.link.prev) {
++		wl_list_remove(&xwayland_view->map.link);
++	}
++	if (xwayland_view->unmap.link.prev) {
++		wl_list_remove(&xwayland_view->unmap.link);
++	}
+ 	wl_list_remove(&xwayland_view->request_fullscreen.link);
+ 	xwayland_view->xwayland_surface = NULL;
+ 
+-- 
+2.39.5
+
