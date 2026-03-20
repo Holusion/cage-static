@@ -3,6 +3,36 @@
 
 # Build
 
+## Prerequisites: multi-platform builder
+
+The build command uses `--platform linux/amd64,linux/arm64,linux/arm/v7` with a local file output. The default `docker` builder driver does **not** support this — it only builds for the host platform and cannot export multi-platform results to `type=local`. You will get:
+
+```
+ERROR: failed to build: Multi-platform build is not supported for the docker driver.
+Switch to a different driver, or turn on the containerd image store, and try again.
+```
+
+Create a one-time builder using the `docker-container` driver (which runs BuildKit in a container and supports multi-platform + local export):
+
+```bash
+docker buildx create --name multiarch --driver docker-container --use
+docker buildx inspect --bootstrap   # pulls the BuildKit image and starts the container
+```
+
+To verify cross-arch emulation is available (required for arm64/armhf builds on an amd64 host):
+
+```bash
+docker run --rm --privileged tonistiigi/binfmt --install all
+```
+
+You only need to do the above once. After that, and on subsequent sessions, just make sure the builder is selected:
+
+```bash
+docker buildx use multiarch
+```
+
+## Build command
+
 ```bash
 docker buildx build --platform linux/amd64,linux/arm64,linux/arm/v7 --output=type=local,dest=dist .
 mv dist/linux_amd64/cage dist/cage-amd64
