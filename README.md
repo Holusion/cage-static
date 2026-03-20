@@ -114,14 +114,15 @@ These are not directly linked by cage, but required at runtime because the direc
 To easily test existing patches and develop new ones, run :
 
 ```bash
-export REF="v0.2.1"
+export REF=$(cat CAGE_REF)
 if test -d cage; then
-  cd cage
-  git fetch origin "$REF"
-  git checkout "$REF"
+  git -C cage fetch --depth 1 --filter=blob:none origin "$REF"
+  git -C cage checkout FETCH_HEAD
 else
-  git clone --filter=blob:none --branch "$REF" https://github.com/cage-kiosk/cage.git
-cd cage
+  git init cage
+  git -C cage remote add origin https://github.com/cage-kiosk/cage.git
+  git -C cage fetch --depth 1 --filter=blob:none origin "$REF"
+  git -C cage checkout FETCH_HEAD
 fi
 git am ../patches/*.patch
 ```

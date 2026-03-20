@@ -73,9 +73,12 @@ RUN  apt-get -qqy update \
 && rm -rf /var/lib/apt/lists/*
 
 ARG CAGE_REPO="https://github.com/cage-kiosk/cage"
-ARG CAGE_REF="v0.2.1"
+COPY CAGE_REF /cage_ref
 
-RUN git clone --depth 1 --filter=blob:none --branch "${CAGE_REF}" "${CAGE_REPO}" "/cage"
+RUN git init /cage \
+ && git -C /cage remote add origin "${CAGE_REPO}" \
+ && git -C /cage fetch --depth 1 --filter=blob:none origin "$(cat /cage_ref)" \
+ && git -C /cage checkout FETCH_HEAD
 
 WORKDIR /cage
 
