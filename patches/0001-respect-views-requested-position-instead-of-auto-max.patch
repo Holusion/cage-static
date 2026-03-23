@@ -15,8 +15,9 @@ diff --git a/view.c b/view.c
 index 8cbeb5e..c088441 100644
 --- a/view.c
 +++ b/view.c
-@@ -15,6 +15,7 @@
+@@ -15,7 +15,8 @@
  #include <wayland-server-core.h>
+ #include <wlr/types/wlr_foreign_toplevel_management_v1.h>
  #include <wlr/types/wlr_output.h>
  #include <wlr/types/wlr_scene.h>
 +#include <wlr/util/log.h>
