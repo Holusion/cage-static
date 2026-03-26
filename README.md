@@ -133,7 +133,7 @@ To develop a new patch, start from a fresh clone with all patches applied (see a
 ```bash
 # from repo root, outputs patches numbered in the patches/ folder
 rm -rf patches/*
-(cd cage && git format-patch --output-directory ../patches $REF..HEAD --start-number 001)
+(cd cage && git format-patch --output-directory ../patches $(cat ../CAGE_REF)..HEAD --no-numbered --start-number 001)
 ```
 
 
