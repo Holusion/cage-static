@@ -1,7 +1,7 @@
-From 70e0ec975b7ac4ec16d479acaa1230972cabc1a6 Mon Sep 17 00:00:00 2001
+From f5d4bc2990ca4ee035e15d9e339d87f29c6b2467 Mon Sep 17 00:00:00 2001
 From: Sebastien DUMETZ <s.dumetz@holusion.com>
 Date: Fri, 19 Apr 2024 15:42:07 +0200
-Subject: [PATCH 3/6] set focus on every view that asks it
+Subject: [PATCH] set focus on every view that asks it
 
 ---
  seat.c | 2 +-

@@ -1,19 +1,19 @@
-From 656bb0950481f3df86c9fb5ad7312c0c14a19eb8 Mon Sep 17 00:00:00 2001
+From 99bad1ea06fa2ea80ea4589b236c38666926b320 Mon Sep 17 00:00:00 2001
 From: Jesper Schmitz Mouridsen <jepsper@schmitz.computer>
 Date: Mon, 23 Feb 2026 22:03:47 +0100
-Subject: [PATCH 6/6] fix #299 Hides the pointer after 3 seconds (should be
- made configurable) assumes absolute are touchscreen and that relative are
+Subject: [PATCH] fix #299 Hides the pointer after 3 seconds (should be made
+ configurable) assumes absolute are touchscreen and that relative are
  pointers, which is probably too primitive.. One might want to set a dev type
  somewhere.
 
 ---
  calibration.c |   8 ++--
- seat.c        | 113 ++++++++++++++++++++++++++++++--------------------
+ seat.c        | 112 +++++++++++++++++++++++++++++---------------------
  seat.h        |   7 +++-
- 3 files changed, 77 insertions(+), 51 deletions(-)
+ 3 files changed, 76 insertions(+), 51 deletions(-)
 
 diff --git a/calibration.c b/calibration.c
-index f57cd6d..7475f3e 100644
+index 6ec9f6a..a761ccd 100644
 --- a/calibration.c
 +++ b/calibration.c
 @@ -177,8 +177,8 @@ static void handle_map_to_region(struct wl_client *client, struct wl_resource *r
@@ -39,7 +39,7 @@ index f57cd6d..7475f3e 100644
  		}
  	}
 diff --git a/seat.c b/seat.c
-index e54451e..6fff712 100644
+index e54451e..184296e 100644
 --- a/seat.c
 +++ b/seat.c
 @@ -60,6 +60,24 @@ static void drag_icon_update_position(struct cg_drag_icon *drag_icon);
@@ -134,7 +134,8 @@ index e54451e..6fff712 100644
  
  	wl_list_insert(&seat->pointers, &pointer->link);
  	pointer->destroy.notify = handle_pointer_destroy;
-@@ -502,7 +512,7 @@ handle_request_set_cursor(struct wl_listener *listener, void *data)
+@@ -501,8 +511,8 @@ handle_request_set_cursor(struct wl_listener *listener, void *data)
+ 
  	/* This can be sent by any client, so we check to make sure
  	 * this one actually has pointer focus first. */
 -	if (focused_client == event->seat_client->client) {
@@ -191,10 +192,9 @@ index e54451e..6fff712 100644
 +
  	struct cg_seat *seat = wl_container_of(listener, seat, cursor_motion_absolute);
  	struct wlr_pointer_motion_absolute_event *event = data;
--
 +	if(!seat->cage_cursor->hidden)
 +		cage_cursor_set_visibility(seat,false); // assume non pointer on absolute motion
-+	
+ 
  	double lx, ly;
 -	wlr_cursor_absolute_to_layout_coords(seat->cursor, &event->pointer->base, event->x, event->y, &lx, &ly);
 +	wlr_cursor_absolute_to_layout_coords(seat->cage_cursor->cursor, &event->pointer->base, event->x, event->y, &lx, &ly);
@@ -267,7 +267,7 @@ index e54451e..6fff712 100644
  
  
  #if CAGE_HAS_INPUT_CALIBRATION
-@@ -859,32 +877,32 @@ seat_create(struct cg_server *server, struct wlr_backend *backend)
+@@ -859,7 +877,7 @@ seat_create(struct cg_server *server, struct wlr_backend *backend)
  		seat->xcursor_manager = wlr_xcursor_manager_create(NULL, XCURSOR_SIZE);
  		if (!seat->xcursor_manager) {
  			wlr_log(WLR_ERROR, "Cannot create XCursor manager");
@@ -276,9 +276,9 @@ index e54451e..6fff712 100644
  			wl_list_remove(&seat->destroy.link);
  			free(seat);
  			return NULL;
- 		}
+@@ -867,24 +885,24 @@ seat_create(struct cg_server *server, struct wlr_backend *backend)
  	}
-
+ 
  	seat->cursor_motion_relative.notify = handle_cursor_motion_relative;
 -	wl_signal_add(&seat->cursor->events.motion, &seat->cursor_motion_relative);
 +	wl_signal_add(&seat->cage_cursor->cursor->events.motion, &seat->cursor_motion_relative);
@@ -310,7 +310,7 @@ index e54451e..6fff712 100644
  
  	seat->request_set_cursor.notify = handle_request_set_cursor;
  	wl_signal_add(&seat->seat->events.request_set_cursor, &seat->request_set_cursor);
-@@ -893,6 +912,8 @@ seat_create(struct cg_server *server, struct wlr_backend *backend)
+@@ -893,6 +911,8 @@ seat_create(struct cg_server *server, struct wlr_backend *backend)
  	seat->request_set_primary_selection.notify = handle_request_set_primary_selection;
  	wl_signal_add(&seat->seat->events.request_set_primary_selection, &seat->request_set_primary_selection);
  
@@ -319,7 +319,7 @@ index e54451e..6fff712 100644
  	wl_list_init(&seat->keyboards);
  	wl_list_init(&seat->keyboard_groups);
  	wl_list_init(&seat->pointers);
-@@ -909,7 +930,7 @@ seat_create(struct cg_server *server, struct wlr_backend *backend)
+@@ -909,7 +929,7 @@ seat_create(struct cg_server *server, struct wlr_backend *backend)
  	wl_signal_add(&seat->seat->events.request_start_drag, &seat->request_start_drag);
  	seat->start_drag.notify = handle_start_drag;
  	wl_signal_add(&seat->seat->events.start_drag, &seat->start_drag);
@@ -328,7 +328,7 @@ index e54451e..6fff712 100644
  	return seat;
  }
  
-@@ -999,5 +1020,5 @@ seat_center_cursor(struct cg_seat *seat)
+@@ -999,5 +1019,5 @@ seat_center_cursor(struct cg_seat *seat)
  	/* Place the cursor in the center of the output layout. */
  	struct wlr_box layout_box;
  	wlr_output_layout_get_box(seat->server->output_layout, NULL, &layout_box);

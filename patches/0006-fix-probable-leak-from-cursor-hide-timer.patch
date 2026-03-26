@@ -1,4 +1,4 @@
-From 730e6632aeae83909fcbee1edbd4ebea4ce803d4 Mon Sep 17 00:00:00 2001
+From d042b3afd1b786701944ebfb98bd3691acc22082 Mon Sep 17 00:00:00 2001
 From: Sebastien DUMETZ <s.dumetz@holusion.com>
 Date: Wed, 18 Mar 2026 09:21:13 +0100
 Subject: [PATCH] fix probable leak from cursor hide timer
@@ -8,7 +8,7 @@ Subject: [PATCH] fix probable leak from cursor hide timer
  1 file changed, 1 insertion(+)
 
 diff --git a/seat.c b/seat.c
-index 6fff712..295803a 100644
+index 184296e..d5417c7 100644
 --- a/seat.c
 +++ b/seat.c
 @@ -829,6 +829,7 @@ handle_destroy(struct wl_listener *listener, void *data)

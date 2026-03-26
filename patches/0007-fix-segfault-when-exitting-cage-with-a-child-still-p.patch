@@ -1,20 +1,21 @@
-From 432db86af5a097fca061c4a9ba25ab9192f9a2cd Mon Sep 17 00:00:00 2001
+From 9bceb8ad916e9e5eaf1e79314e8c7b5e9321a096 Mon Sep 17 00:00:00 2001
 From: Sebastien DUMETZ <s.dumetz@holusion.com>
 Date: Wed, 18 Mar 2026 12:01:02 +0100
 Subject: [PATCH] fix segfault when exitting cage with a child still present
 
 ---
- view.c | 22 +++++++++++++++++++++-
+ view.c | 21 ++++++++++++++++++++-
  view.h |  1 +
- 2 files changed, 22 insertions(+), 1 deletion(-)
+ 2 files changed, 21 insertions(+), 1 deletion(-)
 
 diff --git a/view.c b/view.c
+index 94fd75e..06fd52f 100644
 --- a/view.c
 +++ b/view.c
-@@ -125,6 +125,15 @@ view_position_all(struct cg_server *server)
+@@ -112,17 +112,31 @@ view_position_all(struct cg_server *server)
  	}
  }
-
+ 
 +static void
 +handle_surface_destroy(struct wl_listener *listener, void *data)
 +{
@@ -27,25 +28,24 @@ diff --git a/view.c b/view.c
  void
  view_unmap(struct cg_view *view)
  {
-@@ -131,11 +140,16 @@ view_unmap(struct cg_view *view)
  	wl_list_remove(&view->link);
 +	/* Always registered in view_map() before any unmap can fire. */
 +	wl_list_remove(&view->surface_destroy.link);
-
+ 
  	wl_list_remove(&view->request_activate.link);
  	wl_list_remove(&view->request_close.link);
  	wlr_foreign_toplevel_handle_v1_destroy(view->foreign_toplevel_handle);
  	view->foreign_toplevel_handle = NULL;
-
+ 
 -	wlr_scene_node_destroy(&view->scene_tree->node);
 +	if (view->scene_tree) {
 +		wlr_scene_node_destroy(&view->scene_tree->node);
 +		view->scene_tree = NULL;
 +	}
-
+ 
  	view->wlr_surface->data = NULL;
  	view->wlr_surface = NULL;
-@@ -164,6 +178,11 @@ view_map(struct cg_view *view, struct wlr_surface *surface)
+@@ -151,6 +165,11 @@ view_map(struct cg_view *view, struct wlr_surface *surface)
  	if (!view->scene_tree)
  		goto fail;
  	view->scene_tree->node.data = view;
@@ -54,11 +54,11 @@ diff --git a/view.c b/view.c
 +	 * This lets us null scene_tree before view_unmap() tries to use it. */
 +	view->surface_destroy.notify = handle_surface_destroy;
 +	wl_signal_add(&surface->events.destroy, &view->surface_destroy);
-
+ 
  	view->wlr_surface = surface;
  	surface->data = view;
-
 diff --git a/view.h b/view.h
+index 53a04f8..ad29f99 100644
 --- a/view.h
 +++ b/view.h
 @@ -26,6 +26,7 @@ struct cg_view {
@@ -66,8 +66,9 @@ diff --git a/view.h b/view.h
  	struct wlr_surface *wlr_surface;
  	struct wlr_scene_tree *scene_tree;
 +	struct wl_listener surface_destroy; /* nullifies scene_tree when wlroots frees it */
-
+ 
  	/* The view has a position in layout coordinates. */
  	int lx, ly;
---
+-- 
 2.39.5
+
